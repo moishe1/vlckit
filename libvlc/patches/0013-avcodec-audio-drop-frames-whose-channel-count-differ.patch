@@ -1,0 +1,47 @@
+From ceeee93aa77f0adc85de80185a50d08b7b0dfec8 Mon Sep 17 00:00:00 2001
+From: MoviePoop <dev@moviepoop.com>
+Date: Wed, 28 Oct 2026 10:24:14 -0400
+Subject: [PATCH] avcodec: audio: drop frames whose channel count differs from
+ the output
+
+ConvertAVFrame() interleaves one plane per output channel, but the output
+format is derived from the codec context while the frame is only checked
+for a sane channel count. When FFmpeg returns a frame with fewer channels
+than the context (seen with AAC in MP4 after seeking into damaged data,
+right after "Invalid data found when processing input"), the interleave
+reads frame->extended_data past the frame's planes and the decoder thread
+crashes (SIGBUS in ConvertAVFrame on iOS).
+
+Drop such frames and signal a discontinuity, as is already done for an
+invalid channel count.
+---
+ modules/codec/avcodec/audio.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/modules/codec/avcodec/audio.c b/modules/codec/avcodec/audio.c
+index e6c9128..b8f106b 100644
+--- a/modules/codec/avcodec/audio.c
++++ b/modules/codec/avcodec/audio.c
+@@ -458,6 +458,19 @@ static int DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+             if( decoder_UpdateAudioFormat( p_dec ) )
+                 goto drop;
+ 
++            /* The output format is set up from the codec context, but
++             * ConvertAVFrame() interleaves the planes of this frame, one per
++             * output channel. After corrupt input (AAC in MP4, right after a
++             * seek) FFmpeg can return a frame whose channel count differs from
++             * the context's, and reading planes the frame doesn't have crashes
++             * the decoder thread. Drop such a frame. */
++            if( (unsigned)channels != p_dec->fmt_out.audio.i_channels )
++            {
++                msg_Warn( p_dec, "dropping frame with %d channels, output has %u",
++                          channels, p_dec->fmt_out.audio.i_channels );
++                goto drop;
++            }
++
+             block_t *p_converted = ConvertAVFrame( p_dec, frame ); /* Consumes frame */
+             if( p_converted )
+             {
+-- 
+2.51.0.windows.1
+

@@ -1,3 +1,25 @@
+# VLCKit — MoviePoop fork
+
+VideoLAN's [VLCKit](https://code.videolan.org/videolan/VLCKit) 4.0.0-a25 with
+a few libvlc fixes on top, built for iOS devices and published as a Swift
+package for MoviePoop's iPhone app.
+
+- Our patches: `libvlc/patches/0013-*` onward (applied by `compileAndBuildVLCKit.sh`
+  with the upstream ones). Each is meant to go upstream too.
+- Build + release: Actions → "Build VLCKit for iOS" → Run, with a new version
+  such as `4.0.0-a25-mp.2`. It builds `VLCKit.xcframework`, publishes it as a
+  release and points `Package.swift` at it.
+- Use: `.package(url: "https://github.com/<this repo>", exact: "<version>")`,
+  product `VLCKit`.
+
+Patches:
+
+| # | What |
+|---|---|
+| 0013 | avcodec audio: drop frames whose channel count differs from the output (SIGBUS in `ConvertAVFrame` after seeking into damaged AAC) |
+
+---
+
 <img src="https://www.videolan.org/images/vlckit/logo.svg" alt="VLCKit logo" height="140">
 
 #
