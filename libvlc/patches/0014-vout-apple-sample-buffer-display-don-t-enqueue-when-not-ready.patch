@@ -1,0 +1,57 @@
+From bf8b8cb99b875cf5509852096975455dcaed0033 Mon Sep 17 00:00:00 2001
+From: MoviePoop <dev@moviepoop.com>
+Date: Wed, 28 Oct 2026 10:40:06 -0400
+Subject: [PATCH] vout: apple: sample buffer display: don't enqueue when the
+ layer isn't ready
+
+RenderPicture() enqueues every picture into the AVSampleBufferDisplayLayer
+without checking isReadyForMoreMediaData. The layer retains each sample
+buffer's pixel buffer until it is displayed, while the VLC picture goes back
+to the pool immediately, so the picture pool never throttles the decoder
+and nothing bounds the layer's queue.
+
+On iOS (VLCKit 4.0.0-a25) we see the app's footprint grow by 20-60 MB/s
+during normal playback of 1080p HEVC streams until jetsam kills it at
+~3.3 GB; every seek (which flushes the layer) brings it back to ~130 MB.
+
+Drop the picture while the layer reports it can't take more data, and warn
+(rate-limited) so the condition shows up in logs.
+---
+ .../video_output/apple/VLCSampleBufferDisplay.m    | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/modules/video_output/apple/VLCSampleBufferDisplay.m b/modules/video_output/apple/VLCSampleBufferDisplay.m
+index c59e87b..8fc0627 100644
+--- a/modules/video_output/apple/VLCSampleBufferDisplay.m
++++ b/modules/video_output/apple/VLCSampleBufferDisplay.m
+@@ -847,6 +847,7 @@ API_AVAILABLE(tvos(17.0), visionos(1.0))
+ {
+     @public
+     filter_t *converter;
++    unsigned dropped_not_ready;
+ }
+     @property (nonatomic, readonly, weak) VLCView *window;
+     @property (nonatomic, readonly) vout_display_t *vd;
+@@ -1095,6 +1096,19 @@ static void RenderPicture(vout_display_t *vd, picture_t *pic, vlc_tick_t date) {
+             return;
+         if (sys.displayLayer.status == AVQueuedSampleBufferRenderingStatusFailed)
+             return;
++        /* Back-pressure. The layer keeps every enqueued sample buffer (and
++         * its pixel buffer) until it has been displayed, while the picture is
++         * handed back to the pool right after enqueueing — so nothing else
++         * bounds that queue, and when the layer falls behind, decoded frames
++         * pile up until the app is killed for memory (seen on iOS with 1080p
++         * HEVC: +20-60 MB/s, 3.3 GB within minutes, freed by any seek's
++         * flush). Drop the picture when the layer can't take more. */
++        if (!sys.displayLayer.isReadyForMoreMediaData) {
++            if (sys->dropped_not_ready++ % 100 == 0)
++                msg_Warn(vd, "display layer not ready, dropped %u picture(s)",
++                         sys->dropped_not_ready);
++            return;
++        }
+     }
+ 
+     picture_Hold(pic);
+-- 
+2.51.0.windows.1
+

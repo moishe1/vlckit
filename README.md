@@ -17,6 +17,7 @@ Patches:
 | # | What |
 |---|---|
 | 0013 | avcodec audio: drop frames whose channel count differs from the output (SIGBUS in `ConvertAVFrame` after seeking into damaged AAC) |
+| 0014 | Apple sample-buffer display: don't enqueue pictures while the layer isn't ready (decoded frames piling up to 3 GB+ until the app is killed) |
 
 ---
 

@@ -30,14 +30,10 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # VLC's extras/tools builds whatever is missing; having these already
-      # just saves time. The build script resets PATH, so pass them via VLC_PATH.
-      - name: Build tools
-        run: brew install autoconf automake libtool pkg-config cmake ninja meson nasm gettext || true
-
+      # No Homebrew build tools: VLC's extras/tools builds the versions it
+      # wants (as VideoLAN's own CI does). Homebrew's ninja on PATH broke the
+      # contrib build's make jobserver ("Could not initialize jobserver").
       - name: Build VLCKit (iOS device, arm64, release)
-        env:
-          VLC_PATH: /opt/homebrew/bin
         run: ./compileAndBuildVLCKit.sh -f -r -a aarch64
 
       - name: Package
