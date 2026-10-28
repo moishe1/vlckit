@@ -30,10 +30,18 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # No Homebrew build tools: VLC's extras/tools builds the versions it
-      # wants (as VideoLAN's own CI does). Homebrew's ninja on PATH broke the
-      # contrib build's make jobserver ("Could not initialize jobserver").
+      # VLC's extras/tools builds the other tools it wants (as VideoLAN's own
+      # CI does). The one thing it needs from outside is a modern GNU make:
+      # macOS ships make 3.81, whose pipe jobserver hands ninja closed file
+      # descriptors ("ninja: error: Could not initialize jobserver"). make 4.4
+      # uses a fifo jobserver. Only its gnubin directory goes on the build's
+      # PATH (via VLC_PATH) — Homebrew's own ninja broke the build the same way.
+      - name: GNU make 4.4
+        run: brew install make
+
       - name: Build VLCKit (iOS device, arm64, release)
+        env:
+          VLC_PATH: /opt/homebrew/opt/make/libexec/gnubin
         run: ./compileAndBuildVLCKit.sh -f -r -a aarch64
 
       - name: Package
