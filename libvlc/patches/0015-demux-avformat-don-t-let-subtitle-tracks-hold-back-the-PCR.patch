@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: MoviePoop <dev@moviepoop.com>
+Date: Sun, 1 Nov 2026 19:17:40 -0500
+Subject: [PATCH] demux: avformat: don't let subtitle tracks hold back the PCR
+
+The PCR is the lowest timestamp among tracks within 10 s of the newest one.
+A subtitle track only produces packets when someone speaks, so after each
+cue the PCR sits at that cue while audio and video read on, then leaps
+forward by up to 10 s at the next cue or when the track leaves the window.
+
+The input is paced by the PCR, so while it is stuck nothing throttles the
+demuxer. The leap, with hardly any system time elapsed, exceeds CR_MAX_GAP
+(300 ms), so the input clock logs "clock gap, unexpected stream
+discontinuity" and takes a new reference point at the leaped-to time, which
+keeps the read-ahead it has gained. It accumulates cue after cue, and each
+discontinuity also disturbs output timing.
+
+Seen on iOS with network MKVs: reading at many times the bitrate, memory
+growing to the jetsam limit, runs of clock gaps, thousands of late pictures
+dropped while audio keeps playing.
+
+Only count audio and video tracks. Subtitles are muxed ahead of their display
+time anyway, so nothing needs the PCR to wait for them.
+---
+ modules/demux/avformat/demux.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/modules/demux/avformat/demux.c b/modules/demux/avformat/demux.c
+index 0a4cfbd..4cfd083 100644
+--- a/modules/demux/avformat/demux.c
++++ b/modules/demux/avformat/demux.c
+@@ -977,7 +977,8 @@ static int Demux( demux_t *p_demux )
+     vlc_tick_t i_ts_max = VLC_TICK_MIN;
+     for( unsigned i = 0; i < p_sys->i_tracks; i++ )
+     {
+-        if( p_sys->tracks[i].p_es != NULL )
++        if( p_sys->tracks[i].p_es != NULL &&
++                p_sys->tracks[i].es_format.i_cat != SPU_ES )
+             i_ts_max = __MAX( i_ts_max, p_sys->tracks[i].i_pcr );
+     }
+ 
+@@ -985,6 +986,7 @@ static int Demux( demux_t *p_demux )
+     for( unsigned i = 0; i < p_sys->i_tracks; i++ )
+     {
+         if( p_sys->tracks[i].p_es != NULL &&
++                p_sys->tracks[i].es_format.i_cat != SPU_ES &&
+                 p_sys->tracks[i].i_pcr != VLC_TICK_INVALID &&
+                 p_sys->tracks[i].i_pcr + VLC_TICK_FROM_SEC(10)>= i_ts_max )
+             i_ts_min = __MIN( i_ts_min, p_sys->tracks[i].i_pcr );
+-- 
+2.51.0.windows.1
+
