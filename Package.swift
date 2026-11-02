@@ -16,8 +16,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "VLCKit",
-            url: "https://github.com/moishe1/vlckit/releases/download/4.0.0-a25-mp.1/VLCKit-ios.zip",
-            checksum: "91835b5bc86547d85c866d28f9df52f8f96a40cfd603f0a9542a5f84619d76a5"
+            url: "https://github.com/moishe1/vlckit/releases/download/4.0.0-a25-mp.2/VLCKit-ios.zip",
+            checksum: "5bc2fb75a68de30f3bfeb808f1f6893469ffe8e9b7039781e1cd1abdbb9da7f6"
         )
     ]
 )
