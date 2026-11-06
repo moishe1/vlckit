@@ -1,0 +1,110 @@
+From 93a411b18ebb00167be8831f451bb23880861b1d Mon Sep 17 00:00:00 2001
+From: MoviePoop <dev@moviepoop.com>
+Date: Fri, 6 Nov 2026 00:26:36 -0500
+Subject: [PATCH] avcodec: audio: drop frames that don't fit the output before
+ converting
+
+ConvertAVFrame() interleaves fmt_out.audio.i_channels planes of
+frame->nb_samples samples and then, when b_extract is set, reorders them
+with pi_extraction. None of that is checked against the frame. After
+corrupt input (AAC 5.1 in MP4, right after "Invalid data found when
+processing input") the decoder thread crashes with SIGSEGV in
+aout_ChannelExtract called from ConvertAVFrame, even with the channel
+count check: the counts match but the rest doesn't.
+
+- SetupOutputFormat(): when no channel layout is found, clear b_extract.
+  It kept the previous layout's extraction table, whose indices refer to
+  channels the new frames may not have.
+- DecodeBlock(): before ConvertAVFrame(), drop a frame whose sample format
+  differs from the context's, whose planes/linesize can't hold nb_samples
+  for every output channel, whose output frame size is too small, or
+  whose extraction table indexes past the output channels.
+---
+ modules/codec/avcodec/audio.c | 57 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 57 insertions(+)
+
+diff --git a/modules/codec/avcodec/audio.c b/modules/codec/avcodec/audio.c
+index b8f106b..78a6c0d 100644
+--- a/modules/codec/avcodec/audio.c
++++ b/modules/codec/avcodec/audio.c
+@@ -313,6 +313,51 @@ static void Flush( decoder_t *p_dec )
+ /*****************************************************************************
+  * DecodeBlock: Called to decode one frame
+  *****************************************************************************/
++/* ConvertAVFrame() trusts the frame to match the output format: it
++ * interleaves fmt_out.audio.i_channels planes of frame->nb_samples samples,
++ * then (b_extract) reorders them with pi_extraction. After corrupt input the
++ * codec context can be reconfigured under a frame, or report no channel
++ * layout while a reorder table from the previous layout is still active, and
++ * the interleave/extract then reads or writes past a buffer (SIGSEGV in
++ * aout_ChannelExtract via ConvertAVFrame, AAC 5.1 in MP4 right after
++ * "Invalid data found when processing input"). Check everything it relies
++ * on; a frame that doesn't fit is dropped like other bad frames. */
++static bool FrameFitsOutput( decoder_t *p_dec, const AVFrame *frame )
++{
++    decoder_sys_t *p_sys = p_dec->p_sys;
++    const AVCodecContext *ctx = p_sys->p_context;
++    const unsigned i_channels = p_dec->fmt_out.audio.i_channels;
++
++    if( frame->format != ctx->sample_fmt || frame->nb_samples <= 0
++     || frame->extended_data == NULL )
++        return false;
++    const int bps = av_get_bytes_per_sample( ctx->sample_fmt );
++    if( bps <= 0 || i_channels == 0 || i_channels > AOUT_CHAN_MAX )
++        return false;
++    if( p_dec->fmt_out.audio.i_bitspersample != (unsigned)bps * 8
++     || p_dec->fmt_out.audio.i_bytes_per_frame < i_channels * (unsigned)bps )
++        return false;
++
++    if( av_sample_fmt_is_planar( ctx->sample_fmt ) )
++    {
++        /* One plane per channel, each linesize[0] bytes. */
++        if( frame->linesize[0] < frame->nb_samples * bps )
++            return false;
++        for( unsigned i = 0; i < i_channels; i++ )
++            if( frame->extended_data[i] == NULL )
++                return false;
++    }
++    else if( frame->linesize[0] < frame->nb_samples * bps * (int)i_channels )
++        return false;
++
++    if( p_sys->b_extract )
++        for( unsigned i = 0; i < i_channels; i++ )
++            if( p_sys->pi_extraction[i] < 0
++             || (unsigned)p_sys->pi_extraction[i] >= i_channels )
++                return false;
++    return true;
++}
++
+ static int DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+ {
+     decoder_sys_t *p_sys = p_dec->p_sys;
+@@ -470,6 +515,15 @@ static int DecodeBlock( decoder_t *p_dec, block_t **pp_block )
+                           channels, p_dec->fmt_out.audio.i_channels );
+                 goto drop;
+             }
++            if( !FrameFitsOutput( p_dec, frame ) )
++            {
++                msg_Warn( p_dec, "dropping frame that doesn't fit the output format "
++                          "(fmt %d/%d, %d samples, linesize %d, %u ch, extract %d)",
++                          frame->format, p_sys->p_context->sample_fmt,
++                          frame->nb_samples, frame->linesize[0],
++                          p_dec->fmt_out.audio.i_channels, p_sys->b_extract );
++                goto drop;
++            }
+ 
+             block_t *p_converted = ConvertAVFrame( p_dec, frame ); /* Consumes frame */
+             if( p_converted )
+@@ -741,6 +795,9 @@ static void SetupOutputFormat( decoder_t *p_dec, bool b_trust )
+         msg_Warn( p_dec, "no channel layout found");
+         p_dec->fmt_out.audio.i_physical_channels = 0;
+         p_dec->fmt_out.audio.i_channels = channel_count;
++        /* No layout, no reordering: don't keep the previous layout's
++         * extraction table (it indexes channels this frame may not have). */
++        p_sys->b_extract = false;
+     }
+ 
+     aout_FormatPrepare( &p_dec->fmt_out.audio );
+-- 
+2.51.0.windows.1
+
