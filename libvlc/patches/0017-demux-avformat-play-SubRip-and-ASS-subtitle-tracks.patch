@@ -1,0 +1,48 @@
+From ffba52810221ae24146f1c02e512c127b889f8e5 Mon Sep 17 00:00:00 2001
+From: MoviePoop <dev@moviepoop.com>
+Date: Thu, 26 Nov 2026 11:42:34 -0500
+Subject: [PATCH] demux: avformat: play SubRip and ASS subtitle tracks
+
+libavformat's Matroska demuxer reports S_TEXT/UTF8 tracks as
+AV_CODEC_ID_SUBRIP and S_TEXT/ASS tracks as AV_CODEC_ID_ASS. Neither has an
+entry in the avcodec fourcc table, so the ES was created with an unknown codec.
+Selecting such a track failed in the decoder with "could not identify
+codec" and the track stayed unselected: no embedded text subtitle could be
+shown for any MKV opened with demux=avformat.
+
+Map them to VLC_CODEC_SUBT and VLC_CODEC_SSA, as the native mkv demuxer
+does. The packets need no conversion and the ASS header is already copied
+from the extradata.
+---
+ modules/demux/avformat/demux.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/modules/demux/avformat/demux.c b/modules/demux/avformat/demux.c
+index 4cfd083..5538e0c 100644
+--- a/modules/demux/avformat/demux.c
++++ b/modules/demux/avformat/demux.c
+@@ -563,8 +563,21 @@ int avformat_OpenDemux( vlc_object_t *p_this )
+             break;
+ 
+         case AVMEDIA_TYPE_SUBTITLE:
++            /* libavformat reports text subtitles in Matroska (S_TEXT/UTF8,
++             * S_TEXT/ASS) as SUBRIP and ASS, which the fourcc table has no
++             * entry for. The packets are what the VLC decoders expect: bare
++             * text for SubRip, "ReadOrder,Layer,Style,..." events for ASS,
++             * both timed by the packet. */
++            if( cp->codec_id == AV_CODEC_ID_SUBRIP )
++                fcc = VLC_CODEC_SUBT;
++            else if( cp->codec_id == AV_CODEC_ID_ASS )
++                fcc = VLC_CODEC_SSA;
+             es_format_Init( &es_fmt, SPU_ES, fcc );
+             es_fmt.i_original_fourcc = CodecTagToFourcc( cp->codec_tag );
++            if( ( cp->codec_id == AV_CODEC_ID_SUBRIP ||
++                  cp->codec_id == AV_CODEC_ID_ASS ) &&
++                strncmp( p_sys->ic->iformat->name, "matroska", 8 ) == 0 )
++                es_fmt.subs.psz_encoding = strdup( "UTF-8" );
+             if( strncmp( p_sys->ic->iformat->name, "matroska", 8 ) == 0 &&
+                 cp->codec_id == AV_CODEC_ID_DVD_SUBTITLE &&
+                 cp->extradata != NULL &&
+-- 
+2.51.0.windows.1
+
